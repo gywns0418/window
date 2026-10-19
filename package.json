@@ -1,0 +1,47 @@
+{
+  "name": "snip-shortcut",
+  "productName": "SnipShortcut",
+  "version": "1.0.0",
+  "description": "Windows 기본 캡처 도구를 사용자 지정 단축키로 실행/활성화하는 트레이 상주 유틸리티",
+  "main": "src/main/main.js",
+  "author": "TANINE",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/run.js",
+    "build": "electron-builder --win portable --x64",
+    "build:dir": "electron-builder --win dir --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.tanine.snipshortcut",
+    "productName": "SnipShortcut",
+    "copyright": "TANINE",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.exe"
+    }
+  }
+}

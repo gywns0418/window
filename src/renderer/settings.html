@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;"
+    />
+    <title>SnipShortcut 설정</title>
+    <link rel="stylesheet" href="settings.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>SnipShortcut</h1>
+        <p class="sub">단축키로 Windows 캡처 도구를 실행합니다.</p>
+      </header>
+
+      <section class="card">
+        <h2>캡처 도구 단축키</h2>
+        <div class="shortcut-row">
+          <div id="shortcutBox" class="shortcut-box" tabindex="-1" aria-live="polite">-</div>
+          <span id="shortcutStatus" class="badge">확인 중</span>
+        </div>
+
+        <div id="recordHint" class="hint" hidden>
+          새 단축키를 누르세요. (Ctrl 또는 Alt 포함, Win 키 조합 불가) &nbsp;
+          <kbd>Esc</kbd> 취소 · <kbd>Enter</kbd> 저장
+        </div>
+        <div id="message" class="message" role="status" hidden></div>
+
+        <div class="buttons">
+          <button id="btnRecord" type="button" class="primary">단축키 변경</button>
+          <button id="btnSave" type="button" class="primary" hidden disabled>저장</button>
+          <button id="btnCancel" type="button" hidden>취소</button>
+          <button id="btnReset" type="button">기본값 (Ctrl + Alt + S)</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>일반</h2>
+        <label class="check">
+          <input id="chkAutoLaunch" type="checkbox" />
+          Windows 시작 시 자동 실행
+        </label>
+        <p id="portableNote" class="note" hidden>
+          포터블 exe 를 다른 폴더로 옮기면 한 번 직접 실행해야 자동 실행 경로가 갱신됩니다.
+        </p>
+        <label class="check">
+          <input id="chkNotifications" type="checkbox" />
+          시작 알림 표시 (오류 알림은 항상 표시)
+        </label>
+        <label class="field">
+          <span>실행할 캡처 도구</span>
+          <select id="selLaunchTarget">
+            <option value="auto">자동 선택 (권장)</option>
+            <option value="modern">캡처 도구 앱 (Windows 11 / 캡처 및 스케치)</option>
+            <option value="legacy">기존 캡처 도구 (SnippingTool.exe)</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2>캡처 도구</h2>
+        <label class="check">
+          <input id="chkAutoNew" type="checkbox" />
+          단축키로 열 때 '새 캡처'까지 자동 실행
+        </label>
+        <p class="note">
+          캡처 도구의 '새 캡처' 버튼을 접근성 API로 한 번 누릅니다. 회사 보안 정책상 허용된 경우에만 켜고,
+          차단 메시지가 나타나면 즉시 끄세요. 트레이 메뉴와 아래 버튼은 창만 엽니다.
+        </p>
+        <div class="buttons">
+          <button id="btnOpenSnip" type="button">지금 캡처 도구 열기</button>
+        </div>
+        <p class="note">
+          캡처한 이미지는 캡처 도구가 클립보드에 복사하며 <kbd>Ctrl</kbd>+<kbd>V</kbd> 로 붙여넣을 수 있습니다.
+        </p>
+      </section>
+
+      <footer>
+        <span id="version"></span>
+        <button id="btnFolder" type="button" class="link">설정 파일 위치 열기</button>
+      </footer>
+    </main>
+
+    <script src="../shared/accelerator.js"></script>
+    <script src="settings.js"></script>
+  </body>
+</html>

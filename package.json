@@ -38,7 +38,8 @@
           ]
         }
       ],
-      "requestedExecutionLevel": "asInvoker"
+      "requestedExecutionLevel": "asInvoker",
+      "signAndEditExecutable": false
     },
     "portable": {
       "artifactName": "${productName}-${version}-portable.exe"

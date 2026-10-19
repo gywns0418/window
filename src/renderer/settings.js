@@ -18,6 +18,9 @@
     chkAutoLaunch: $('chkAutoLaunch'),
     chkNotifications: $('chkNotifications'),
     chkAutoNew: $('chkAutoNew'),
+    chkAutoClose: $('chkAutoClose'),
+    autoCloseLabel: $('autoCloseLabel'),
+    selAfterCapture: $('selAfterCapture'),
     selLaunchTarget: $('selLaunchTarget'),
     portableNote: $('portableNote'),
     btnOpenSnip: $('btnOpenSnip'),
@@ -58,6 +61,12 @@
     el.chkAutoLaunch.checked = !!state.autoLaunch;
     el.chkNotifications.checked = !!state.showNotifications;
     el.chkAutoNew.checked = !!state.autoNewCapture;
+    // 자동 닫기는 '새 캡처' 자동 실행이 켜져 있을 때만 의미가 있다.
+    el.chkAutoClose.checked = !!state.autoCloseAfterCapture;
+    el.chkAutoClose.disabled = !state.autoNewCapture;
+    el.autoCloseLabel.textContent = '캡처 후 ' + (state.autoCloseDelaySec || 10) + '초 뒤 캡처 도구';
+    el.selAfterCapture.value = state.afterCaptureAction || 'close';
+    el.selAfterCapture.disabled = !state.autoNewCapture || !state.autoCloseAfterCapture;
     el.selLaunchTarget.value = state.launchTarget || 'auto';
     el.portableNote.hidden = !state.isPortable;
     el.version.textContent = 'v' + state.version;
@@ -215,6 +224,26 @@
         el.chkAutoNew.disabled = false;
       });
   });
+
+  el.chkAutoClose.addEventListener('change', function () {
+    var wanted = el.chkAutoClose.checked;
+    snipApi.setAutoClose(wanted).then(function (result) {
+      render(result.state);
+      showMessage(wanted ? afterCaptureMessage(result.state) : '캡처 후 자동 닫기/최소화를 껐습니다.', 'ok');
+    });
+  });
+
+  el.selAfterCapture.addEventListener('change', function () {
+    snipApi.setAfterCaptureAction(el.selAfterCapture.value).then(function (result) {
+      render(result.state);
+      showMessage(afterCaptureMessage(result.state), 'ok');
+    });
+  });
+
+  function afterCaptureMessage(s) {
+    var verb = s.afterCaptureAction === 'minimize' ? '최소화합니다' : '닫습니다';
+    return '캡처 후 ' + s.autoCloseDelaySec + '초 뒤 캡처 도구를 ' + verb + '.';
+  }
 
   el.selLaunchTarget.addEventListener('change', function () {
     snipApi.setLaunchTarget(el.selLaunchTarget.value).then(function (result) {

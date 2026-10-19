@@ -14,16 +14,20 @@ const fs = require('fs');
 const os = require('os');
 const { execFile, spawn } = require('child_process');
 const core = require('./snippingToolCore');
-const { invokeNewCapture } = require('./newCapture');
+const { LAUNCH_TIMEOUT_MS } = require('./newCaptureCore');
+const { invokeNewCapture, listRunningPids } = require('./newCapture');
 
 const TASKLIST_TIMEOUT_MS = 5000;
 const ACTIVATE_TIMEOUT_MS = 5000;
 const VERIFY_TOTAL_MS = 6000;
-const VERIFY_INTERVAL_MS = 400;
-const COOLDOWN_MS = 1000;
+const VERIFY_INTERVAL_MS = 150;
+// 직전 처리 후 이 시간 안의 입력은 무시(연타 방지). 캡처 직후 창만 남았을 때 바로 다시 누를 수 있도록 짧게 둔다.
+const COOLDOWN_MS = 300;
 
 let inFlight = null;
 let lastFinishedAt = 0;
+
+const NOOP_TIMER = { mark() {} };
 
 function systemRoot() {
   return process.env.SystemRoot || process.env.windir || 'C:\\Windows';
@@ -33,19 +37,43 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** 실행 중인 캡처 도구 프로세스 목록. tasklist 실패 시 빈 배열. */
-function findRunning() {
+/** 실행 별칭(재분석 지점)도 확인할 수 있도록 lstat 으로 존재 여부를 본다. */
+function pathExists(p) {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function tasklistPids(imageName) {
   return new Promise((resolve) => {
     execFile(
       'tasklist.exe',
-      ['/FO', 'CSV', '/NH'],
-      { windowsHide: true, timeout: TASKLIST_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
+      core.tasklistArgs(imageName),
+      { windowsHide: true, timeout: TASKLIST_TIMEOUT_MS },
       (err, stdout) => {
         if (err) return resolve([]);
-        resolve(core.parseTasklistCsv(stdout, core.PROCESS_NAMES));
+        resolve(core.parseTasklistCsv(stdout, [imageName]).map((p) => p.pid));
       }
     );
   });
+}
+
+/**
+ * 실행 중인 캡처 도구 PID 목록.
+ * - useWorker: 상주 워커가 준비되어 있으면 워커로 조회(수십 ms). 워커가 다른 요청을 처리 중일 때는 쓰지 않는다.
+ * - 그 외: 캡처 도구 이름별로 걸러서 tasklist 를 동시에 조회. 실패 시 빈 배열.
+ */
+async function findRunning(options) {
+  const useWorker = !!(options && options.useWorker);
+  if (useWorker) {
+    const pids = await listRunningPids();
+    if (pids) return pids;
+  }
+  const lists = await Promise.all(core.PROCESS_NAMES.map(tasklistPids));
+  return [].concat.apply([], lists);
 }
 
 /**
@@ -89,15 +117,19 @@ function spawnDetached(command, args) {
   });
 }
 
-/** 실행 직후 프로세스가 실제로 떴는지 확인한다(재실행이 아닌 상태 확인만). */
+/**
+ * 실행 직후 프로세스가 실제로 떴는지 확인한다(재실행이 아닌 상태 확인만).
+ * '새 캡처' 요청과 동시에 돌기 때문에 상주 워커를 쓰지 않고 tasklist 로 확인한다.
+ * @returns {Promise<number[]|null>} 뜬 PID 목록, 시간 안에 안 뜨면 null
+ */
 async function verifyStarted() {
   const deadline = Date.now() + VERIFY_TOTAL_MS;
   while (Date.now() < deadline) {
     await sleep(VERIFY_INTERVAL_MS);
-    const running = await findRunning();
-    if (running.length > 0) return true;
+    const pids = await findRunning({ useWorker: false });
+    if (pids.length > 0) return pids;
   }
-  return false;
+  return null;
 }
 
 function blockedMessage(label) {
@@ -109,33 +141,48 @@ function blockedMessage(label) {
   );
 }
 
-async function openInternal(preference) {
+/**
+ * @param {string} preference
+ * @param {{autoNewCapture?:boolean, newCaptureButtonNames?:string[], preferAlias?:boolean, timer?:{mark:(name:string)=>void}}} opts
+ */
+async function openInternal(preference, opts) {
+  const timer = opts.timer || NOOP_TIMER;
+  const newCaptureOptions = (timeoutMs) => ({ extraButtonNames: opts.newCaptureButtonNames, timeoutMs });
+
   const target = core.resolveLaunchTarget({
     preference,
     release: os.release(),
     systemRoot: systemRoot(),
-    exists: (p) => {
-      try {
-        return fs.existsSync(p);
-      } catch (e) {
-        return false;
-      }
-    }
+    localAppData: process.env.LOCALAPPDATA,
+    preferAlias: opts.preferAlias !== false,
+    exists: pathExists
   });
 
   if (target.kind === 'none') {
     return { ok: false, error: target.reason };
   }
 
-  const running = await findRunning();
+  const pidsBefore = await findRunning({ useWorker: true });
+  timer.mark('check');
 
-  if (running.length > 0 && target.kind === 'legacy') {
-    const activated = await activateByPid(running[0].pid);
-    if (activated) return { ok: true, action: 'activated', target: target.label };
+  const finishActivated = async () => {
+    const result = { ok: true, action: 'activated', target: target.label, via: target.via, pidsBefore, pids: pidsBefore };
+    if (opts.autoNewCapture) {
+      result.newCapture = await invokeNewCapture(newCaptureOptions());
+      timer.mark('newCapture');
+    }
+    return result;
+  };
+
+  if (pidsBefore.length > 0 && target.kind === 'legacy') {
+    const activated = await activateByPid(pidsBefore[0]);
+    timer.mark('activate');
+    if (activated) return finishActivated();
     // 포커스 전환이 불가한 환경(PowerShell 제한 등)에서는 새 창을 하나 연다.
   }
 
   const spawned = await spawnDetached(target.command, target.args);
+  timer.mark('spawn');
   if (!spawned.ok) {
     const code = spawned.error && spawned.error.code;
     return {
@@ -147,41 +194,49 @@ async function openInternal(preference) {
     };
   }
 
-  // 신규 캡처 도구가 이미 실행 중이었다면 explorer 가 기존 창을 활성화한다.
-  if (running.length > 0) {
-    return { ok: true, action: 'activated', target: target.label };
-  }
+  // 신규 캡처 도구가 이미 실행 중이었다면 기존 창이 활성화된다.
+  if (pidsBefore.length > 0) return finishActivated();
 
-  // explorer.exe 는 성공해도 종료 코드가 1인 경우가 있어 종료 코드 대신 프로세스 존재로 확인한다.
-  const started = await verifyStarted();
-  if (!started) {
+  // 새로 실행한 경우: 실행 확인과 '새 캡처' 버튼 대기를 동시에 시작한다.
+  // '새 캡처'는 캡처 도구 창이 실제로 나타나야만 누를 수 있으므로, 실행이 차단되면 누를 대상이 없어 아무 것도 하지 않는다.
+  const newCapturePromise = opts.autoNewCapture ? invokeNewCapture(newCaptureOptions(LAUNCH_TIMEOUT_MS)) : null;
+
+  // 실행 별칭/explorer 는 성공해도 종료 코드가 일정하지 않아 프로세스 존재로 확인한다.
+  const pidsAfter = await verifyStarted();
+  timer.mark('verify');
+  if (!pidsAfter) {
+    if (newCapturePromise) await newCapturePromise;
     return { ok: false, blockedSuspected: true, error: blockedMessage(target.label) };
   }
-  return { ok: true, action: 'launched', target: target.label };
+
+  const result = { ok: true, action: 'launched', target: target.label, via: target.via, pidsBefore, pids: pidsAfter };
+  if (newCapturePromise) {
+    result.newCapture = await newCapturePromise;
+    timer.mark('newCapture');
+  }
+  return result;
 }
 
 /**
  * 캡처 도구를 실행하거나 활성화한다.
  * - 처리 중에 다시 호출되면 무시(중복 실행 방지). '새 캡처' 처리 시간도 포함된다.
  * - 직전 처리 후 COOLDOWN_MS 이내 호출은 무시(단축키 연타 방지)
- * - options.autoNewCapture 가 true 이고 창 열기/활성화에 성공한 경우에만 '새 캡처'를 한 번 누른다.
- *   창 열기에 실패(차단 의심 포함)하면 '새 캡처'는 시도하지 않는다.
+ * - options.autoNewCapture 가 true 이면 캡처 도구 창이 나타난 뒤 '새 캡처'를 한 번 누른다.
+ *   창이 나타나지 않으면(차단 의심 포함) 누르지 않는다.
  * @param {string} preference
- * @param {{autoNewCapture?:boolean, newCaptureButtonNames?:string[]}} [options]
- * @returns {Promise<{ok:boolean, skipped?:boolean, action?:string, error?:string, blockedSuspected?:boolean,
- *                    newCapture?:{ok:boolean, code:number, detail:string, error?:string}}>}
+ * @param {{autoNewCapture?:boolean, newCaptureButtonNames?:string[], preferAlias?:boolean, timer?:{mark:(name:string)=>void}}} [options]
+ * @returns {Promise<{ok:boolean, skipped?:boolean, skipReason?:'busy'|'cooldown', action?:string, via?:string, error?:string, blockedSuspected?:boolean,
+ *                    pidsBefore?:number[], pids?:number[],
+ *                    newCapture?:{ok:boolean, code:number, detail:string, via:string, error?:string}}>}
  */
 function openSnippingTool(preference, options) {
   const opts = options || {};
-  if (inFlight) return Promise.resolve({ ok: true, skipped: true });
-  if (Date.now() - lastFinishedAt < COOLDOWN_MS) return Promise.resolve({ ok: true, skipped: true });
+  if (inFlight) return Promise.resolve({ ok: true, skipped: true, skipReason: 'busy' });
+  if (Date.now() - lastFinishedAt < COOLDOWN_MS) {
+    return Promise.resolve({ ok: true, skipped: true, skipReason: 'cooldown' });
+  }
 
-  inFlight = openInternal(preference)
-    .then(async (result) => {
-      if (!result.ok || !opts.autoNewCapture) return result;
-      result.newCapture = await invokeNewCapture({ extraButtonNames: opts.newCaptureButtonNames });
-      return result;
-    })
+  inFlight = openInternal(preference, opts)
     .catch((err) => ({ ok: false, error: '알 수 없는 오류: ' + ((err && err.message) || err) }))
     .finally(() => {
       inFlight = null;

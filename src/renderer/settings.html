@@ -70,6 +70,19 @@
           캡처 도구의 '새 캡처' 버튼을 접근성 API로 한 번 누릅니다. 회사 보안 정책상 허용된 경우에만 켜고,
           차단 메시지가 나타나면 즉시 끄세요. 트레이 메뉴와 아래 버튼은 창만 엽니다.
         </p>
+        <div class="check sub-option">
+          <input id="chkAutoClose" type="checkbox" />
+          <label id="autoCloseLabel" for="chkAutoClose">캡처 후 10초 뒤 캡처 도구</label>
+          <select id="selAfterCapture" aria-label="캡처 후 처리 방식">
+            <option value="close">닫기</option>
+            <option value="minimize">최소화 (다음 캡처가 더 빠름)</option>
+          </select>
+        </div>
+        <p class="note sub-option">
+          이 프로그램이 연 캡처 도구만 닫거나 최소화합니다(직접 열어 둔 창은 그대로). 시간 안에 영역 선택이나 편집을
+          마치지 않으면 그 상태로 처리되며, 저장 확인 창이 뜨면 자동으로 누르지 않습니다. 대기 시간은 settings.json 의
+          autoCloseDelaySec(5~60초)로 바꿀 수 있습니다.
+        </p>
         <div class="buttons">
           <button id="btnOpenSnip" type="button">지금 캡처 도구 열기</button>
         </div>

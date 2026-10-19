@@ -14,12 +14,19 @@ const autoLaunch = require('./autoLaunch');
 const tray = require('./tray');
 const notify = require('./notify');
 const { openSnippingTool } = require('./snippingTool');
+const autoClose = require('./autoClose');
+const uiaWorker = require('./uiaWorker');
+const timingLog = require('./timing');
+const { createTimer } = require('./timingCore');
+const { shouldScheduleAutoClose, isOwnedInstance } = require('./newCaptureCore');
 const { createWindowIcon } = require('./icon');
 
 const APP_USER_MODEL_ID = 'com.tanine.snipshortcut';
 
 let settingsWindow = null;
 let quitting = false;
+// 이 프로그램이 실행한 캡처 도구 PID (사용자가 직접 연 창과 구분)
+let ownedPids = new Set();
 
 // ---------------------------------------------------------------------------
 // 중복 실행 방지
@@ -49,6 +56,8 @@ function bootstrap() {
   });
 
   app.on('will-quit', () => {
+    autoClose.cancel();
+    uiaWorker.stop();
     shortcut.unregisterAll();
     tray.destroy();
   });
@@ -69,6 +78,9 @@ function currentState() {
     launchTarget: s.launchTarget,
     showNotifications: s.showNotifications,
     autoNewCapture: s.autoNewCapture,
+    autoCloseAfterCapture: s.autoCloseAfterCapture,
+    autoCloseDelaySec: s.autoCloseDelaySec,
+    afterCaptureAction: s.afterCaptureAction,
     isPortable: !!process.env.PORTABLE_EXECUTABLE_FILE,
     settingsPath: settings.filePath(),
     version: app.getVersion()
@@ -94,11 +106,27 @@ function broadcastState() {
 async function triggerSnip(source) {
   const s = settings.load();
   const autoNewCapture = source === 'shortcut' && s.autoNewCapture;
+  // 자동 닫기 대기 중에 단축키를 다시 누르면 이전 타이머를 멈추고, 결과에 따라 처음부터 다시 센다.
+  const hadPending = autoNewCapture ? autoClose.cancel() : false;
+  const timer = createTimer();
+
   const result = await openSnippingTool(s.launchTarget, {
     autoNewCapture,
-    newCaptureButtonNames: s.newCaptureButtonNames
+    newCaptureButtonNames: s.newCaptureButtonNames,
+    preferAlias: s.preferExecutionAlias,
+    timer
   });
-  if (result.skipped) return result;
+  // 연타 방지로 무시된 입력도 기록해 원인 구분에 쓴다.
+  if (s.debugTiming) logTiming(source, result, timer);
+  if (result.skipped) {
+    // 연타로 무시된 입력이면 멈췄던 타이머를 다시 건다.
+    if (hadPending) scheduleAfterCapture(s);
+    return result;
+  }
+  // 이 프로그램이 실행한 캡처 도구 PID 기억(최소화해 둔 창을 다음에 다시 쓸 때 '내 창'으로 판단)
+  if (result.ok && result.action === 'launched' && Array.isArray(result.pids)) {
+    ownedPids = new Set(result.pids);
+  }
   if (!result.ok) {
     // 차단 의심 시 모달로 한 번만 안내하고 재시도하지 않는다.
     notify.error(result.error, { modal: !!result.blockedSuspected });
@@ -112,7 +140,48 @@ async function triggerSnip(source) {
       modal: hasDiagnostics
     });
   }
+
+  const shouldSchedule = shouldScheduleAutoClose({
+    enabled: s.autoCloseAfterCapture,
+    newCaptureOk: !!(result.newCapture && result.newCapture.ok),
+    action: result.action,
+    hadPending,
+    owned: isOwnedInstance(result.pidsBefore, ownedPids)
+  });
+  if (shouldSchedule) scheduleAfterCapture(s);
   return result;
+}
+
+/** 설정된 시간 뒤 캡처 도구 창을 한 번 닫거나 최소화한다. 이미 닫혀 있으면 조용히 끝낸다. */
+function scheduleAfterCapture(s) {
+  autoClose.schedule(s.autoCloseDelaySec * 1000, s.afterCaptureAction, (r) => {
+    if (!r.ok && r.error && !quitting) notify.error(r.error);
+  });
+}
+
+function logTiming(source, result, timer) {
+  timingLog.write({
+    time: new Date(),
+    fields: {
+      source,
+      ok: result.ok,
+      action: result.action,
+      via: result.via,
+      uia: result.newCapture ? result.newCapture.via : undefined,
+      skipped: result.skipped ? result.skipReason || true : undefined,
+      newCapture: result.newCapture ? result.newCapture.detail : undefined,
+      workerReady: uiaWorker.isReady()
+    },
+    steps: timer.steps(),
+    total: timer.total()
+  });
+}
+
+/** '새 캡처' 자동 실행 설정에 맞춰 상주 워커를 켜거나 끈다. */
+function syncWorker() {
+  const s = settings.load();
+  if (s.autoNewCapture) uiaWorker.start({ extraButtonNames: s.newCaptureButtonNames });
+  else uiaWorker.stop();
 }
 
 /**
@@ -141,6 +210,9 @@ async function applyAutoNewCapture(enabled) {
     }
   }
   settings.update({ autoNewCapture: !!enabled });
+  // '새 캡처' 자동 실행을 끄면 그에 딸린 자동 닫기 대기도 취소한다.
+  if (!enabled) autoClose.cancel();
+  syncWorker();
   return { ok: true, state: broadcastState() };
 }
 
@@ -184,7 +256,7 @@ function openSettings() {
   // 다중 모니터: 마우스 커서가 있는 모니터 중앙에 띄운다.
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const width = 480;
-  const height = Math.min(760, display.workArea.height);
+  const height = Math.min(860, display.workArea.height);
   const area = display.workArea;
 
   settingsWindow = new BrowserWindow({
@@ -287,6 +359,19 @@ function registerIpc() {
 
   handle('settings:set-auto-new-capture', (enabled) => applyAutoNewCapture(!!enabled));
 
+  handle('settings:set-auto-close', (enabled) => {
+    settings.update({ autoCloseAfterCapture: !!enabled });
+    // 끄면 대기 중인 닫기도 취소한다.
+    if (!enabled) autoClose.cancel();
+    return { ok: true, state: broadcastState() };
+  });
+
+  handle('settings:set-after-capture-action', (value) => {
+    // 잘못된 값은 settingsCore 정규화에서 기본값('close')으로 바뀐다.
+    settings.update({ afterCaptureAction: value });
+    return { ok: true, state: broadcastState() };
+  });
+
   handle('snip:open', async () => triggerSnip('manual'));
 
   handle('app:open-settings-folder', () => {
@@ -318,6 +403,9 @@ function onReady() {
     triggerSnip('shortcut');
   });
   const reg = shortcut.register(s.shortcut);
+
+  // '새 캡처' 자동 실행이 켜져 있으면 UI Automation 워커를 미리 띄워 첫 단축키부터 빠르게 동작하게 한다.
+  syncWorker();
 
   // 자동 실행이 켜져 있으면 현재 exe 경로로 다시 등록(포터블 exe 위치를 옮긴 경우 대비).
   // 실제 레지스트리 상태와 설정값이 다르면 레지스트리 상태를 따른다.

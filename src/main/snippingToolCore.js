@@ -31,6 +31,20 @@ function legacyExePath(systemRoot) {
 }
 
 /**
+ * Windows 11 캡처 도구 앱의 실행 별칭(App Execution Alias).
+ * 패키지 앱이 등록하는 공식 실행 경로이며, explorer.exe 를 거치지 않아 실행이 조금 빠르다.
+ */
+function executionAliasPath(localAppData) {
+  if (!localAppData) return null;
+  return path.win32.join(localAppData, 'Microsoft', 'WindowsApps', 'SnippingTool.exe');
+}
+
+/** 캡처 도구 이미지 이름 하나로 걸러 조회하는 tasklist 인자(전체 목록 조회보다 빠름) */
+function tasklistArgs(imageName) {
+  return ['/FI', 'IMAGENAME eq ' + imageName, '/FO', 'CSV', '/NH'];
+}
+
+/**
  * 실행할 대상을 "실행 전에" 한 번만 결정한다.
  * 실행 실패 후 다른 경로로 재시도하지 않기 위해, 폴백 판단은 여기서만 한다.
  *
@@ -38,8 +52,10 @@ function legacyExePath(systemRoot) {
  * @param {'auto'|'modern'|'legacy'} opts.preference
  * @param {string} opts.release       os.release()
  * @param {string} opts.systemRoot    %SystemRoot%
+ * @param {string} [opts.localAppData]  %LOCALAPPDATA% (실행 별칭 위치)
+ * @param {boolean} [opts.preferAlias]  실행 별칭이 있으면 사용(기본 true)
  * @param {(p:string)=>boolean} opts.exists  파일 존재 확인 함수
- * @returns {{kind:'modern', command:string, args:string[], label:string}
+ * @returns {{kind:'modern', command:string, args:string[], label:string, via:'alias'|'explorer'}
  *          |{kind:'legacy', command:string, args:string[], label:string}
  *          |{kind:'none', reason:string}}
  */
@@ -47,15 +63,20 @@ function resolveLaunchTarget(opts) {
   const preference = LAUNCH_TARGETS.includes(opts.preference) ? opts.preference : 'auto';
   const legacy = legacyExePath(opts.systemRoot);
   const legacyExists = !!opts.exists(legacy);
+  const alias = opts.preferAlias === false ? null : executionAliasPath(opts.localAppData);
+  const aliasExists = !!alias && !!opts.exists(alias);
 
-  const modernTarget = {
-    kind: 'modern',
-    // 패키지 앱(UWP/WinUI)은 explorer 의 AppsFolder 셸 경로로 실행한다.
-    // 이미 실행 중이면 새 창을 만들지 않고 기존 창이 활성화된다(단일 인스턴스 앱).
-    command: 'explorer.exe',
-    args: ['shell:AppsFolder\\' + MODERN_APP_ID],
-    label: '캡처 도구(Microsoft.ScreenSketch)'
-  };
+  // 패키지 앱(UWP/WinUI)은 실행 별칭 또는 explorer 의 AppsFolder 셸 경로로 실행한다.
+  // 이미 실행 중이면 새 창을 만들지 않고 기존 창이 활성화된다(단일 인스턴스 앱).
+  const modernTarget = aliasExists
+    ? { kind: 'modern', via: 'alias', command: alias, args: [], label: '캡처 도구(Microsoft.ScreenSketch)' }
+    : {
+        kind: 'modern',
+        via: 'explorer',
+        command: 'explorer.exe',
+        args: ['shell:AppsFolder\\' + MODERN_APP_ID],
+        label: '캡처 도구(Microsoft.ScreenSketch)'
+      };
   const legacyTarget = {
     kind: 'legacy',
     command: legacy,
@@ -100,6 +121,8 @@ module.exports = {
   parseWindowsBuild,
   isWindows11,
   legacyExePath,
+  executionAliasPath,
+  tasklistArgs,
   resolveLaunchTarget,
   parseTasklistCsv
 };

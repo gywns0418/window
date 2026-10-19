@@ -178,6 +178,18 @@ button.link:hover {
   margin: 4px 0;
 }
 
+.sub-option {
+  margin-left: 22px;
+}
+
+.check input:disabled + label {
+  color: var(--muted);
+}
+
+.check select {
+  padding: 2px 4px;
+}
+
 .field {
   display: flex;
   flex-direction: column;

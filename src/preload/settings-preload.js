@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('snipApi', {
   setLaunchTarget: (value) => ipcRenderer.invoke('settings:set-launch-target', String(value)),
   setNotifications: (enabled) => ipcRenderer.invoke('settings:set-notifications', !!enabled),
   setAutoNewCapture: (enabled) => ipcRenderer.invoke('settings:set-auto-new-capture', !!enabled),
+  setAutoClose: (enabled) => ipcRenderer.invoke('settings:set-auto-close', !!enabled),
+  setAfterCaptureAction: (value) => ipcRenderer.invoke('settings:set-after-capture-action', String(value)),
   suspendShortcut: () => ipcRenderer.invoke('shortcut:suspend'),
   resumeShortcut: () => ipcRenderer.invoke('shortcut:resume'),
   openSnip: () => ipcRenderer.invoke('snip:open'),

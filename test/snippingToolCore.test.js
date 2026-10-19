@@ -63,3 +63,46 @@ test('snippingToolCore: tasklist CSV 파싱', () => {
   ]);
   assert.deepStrictEqual(core.parseTasklistCsv('INFO: No tasks are running which match the specified criteria.'), []);
 });
+
+const LOCAL = 'C:\\Users\\me\\AppData\\Local';
+const ALIAS = LOCAL + '\\Microsoft\\WindowsApps\\SnippingTool.exe';
+
+test('snippingToolCore: 실행 별칭이 있으면 explorer 대신 별칭으로 실행', () => {
+  const t = core.resolveLaunchTarget({
+    preference: 'auto',
+    release: WIN11,
+    systemRoot: 'C:\\Windows',
+    localAppData: LOCAL,
+    exists: exists([LEGACY, ALIAS])
+  });
+  assert.strictEqual(t.kind, 'modern');
+  assert.strictEqual(t.via, 'alias');
+  assert.strictEqual(t.command, ALIAS);
+  assert.deepStrictEqual(t.args, []);
+});
+
+test('snippingToolCore: 별칭이 없거나 꺼져 있으면 explorer', () => {
+  const base = { preference: 'modern', release: WIN11, systemRoot: 'C:\\Windows', localAppData: LOCAL };
+  assert.strictEqual(core.resolveLaunchTarget(Object.assign({ exists: exists([]) }, base)).via, 'explorer');
+  assert.strictEqual(
+    core.resolveLaunchTarget(Object.assign({ exists: exists([ALIAS]), preferAlias: false }, base)).via,
+    'explorer'
+  );
+  assert.strictEqual(core.executionAliasPath(undefined), null);
+});
+
+test('snippingToolCore: legacy 지정이면 별칭이 있어도 SnippingTool.exe(System32)', () => {
+  const t = core.resolveLaunchTarget({
+    preference: 'legacy',
+    release: WIN11,
+    systemRoot: 'C:\\Windows',
+    localAppData: LOCAL,
+    exists: exists([LEGACY, ALIAS])
+  });
+  assert.strictEqual(t.kind, 'legacy');
+  assert.strictEqual(t.command, LEGACY);
+});
+
+test('snippingToolCore: 이름으로 걸러 조회하는 tasklist 인자', () => {
+  assert.deepStrictEqual(core.tasklistArgs('SnippingTool.exe'), ['/FI', 'IMAGENAME eq SnippingTool.exe', '/FO', 'CSV', '/NH']);
+});
